@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import '../service/pdf_service.dart';
 import 'csv_detalis_page.dart';
 import 'file_settings_page.dart';
 
@@ -33,6 +35,7 @@ class _CsvPageState extends State<CsvViewPage> {
   late Map<String, String> _columnTypes;
   String? _editableColumn;
   final Set<int> _selectedRows = {};
+  final PdfService _pdfService = PdfService();
 
   bool get _isSelectionMode => _selectedRows.isNotEmpty;
   late String _currentFileName;
@@ -40,6 +43,7 @@ class _CsvPageState extends State<CsvViewPage> {
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
   String _searchColumn = "";
+  int _resetCounter = 0;
 
   @override
   void initState() {
@@ -55,7 +59,6 @@ class _CsvPageState extends State<CsvViewPage> {
           ? Set.from(widget.initialVisibleColumns!)
           : Set.from(_allColumns);
 
-      // Imposta la colonna di ricerca iniziale sulla prima visibile
       _searchColumn = _visibleColumns.first;
 
       for (var col in _allColumns) {
@@ -78,22 +81,17 @@ class _CsvPageState extends State<CsvViewPage> {
   }
 
   void _autoSave() async {
-    // 1. Recupera la lista completa di tutti i file dallo storage
-    final List<Map<String, dynamic>> allFiles = await widget.storageService
-        .getAllFiles();
+    final List<Map<String, dynamic>> allFiles = await widget.storageService.getAllFiles();
 
-    // 2. Verifica che l'indice sia valido e aggiorna solo quel file
     if (widget.fileIndex < allFiles.length) {
       allFiles[widget.fileIndex] = {
         'name': widget.fileName,
         'data': _currentData,
-        // Salva i dati correnti, inclusi quelli nei textbox [cite: 2026-02-01]
         'editableColumn': _editableColumn,
         'visibleColumns': _visibleColumns.toList(),
         'columnTypes': _columnTypes,
       };
 
-      // 3. Sovrascrivi la lista completa con i nuovi dati
       await widget.storageService.saveAllFiles(allFiles);
     }
   }
@@ -112,15 +110,66 @@ class _CsvPageState extends State<CsvViewPage> {
     _autoSave();
   }
 
+  void _clearEditableColumn() {
+    if (_editableColumn == null) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Pulisci colonna"),
+        content: Text("Vuoi cancellare tutti i valori nella colonna '$_editableColumn'?"),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Annulla")),
+          FilledButton(
+            onPressed: () {
+              setState(() {
+                for (var row in widget.data) {
+                  row[_editableColumn!] = "";
+                }
+                _resetCounter++; // <--- Incrementa qui per forzare il cambio della Key
+                if (_isSearching) {
+                  _performSearch(_searchController.text);
+                } else {
+                  _currentData = List.from(widget.data);
+                }
+              });
+              _autoSave();
+              Navigator.pop(context);
+            },
+            child: const Text("Pulisci tutto"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handlePdfExport() async {
+    final visibleColumnsList = _allColumns.where((col) => _visibleColumns.contains(col)).toList();
+    final filteredData = widget.data.where((row) {
+      if (_editableColumn == null) return true;
+
+      final value = row[_editableColumn];
+      if (value == null) return false;
+      final String strValue = value.toString().trim();
+      if (strValue == "" || strValue == "0" || strValue == "0.0") {
+        return false;
+      }
+      return true;
+    }).toList();
+
+    await _pdfService.generateAndPrintPdf(
+      _currentFileName,
+      visibleColumnsList,
+      filteredData,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final displayColumns = _allColumns
-        .where((col) => _visibleColumns.contains(col))
-        .toList();
+    final displayColumns = _allColumns.where((col) => _visibleColumns.contains(col)).toList();
 
-    // Se la colonna di ricerca selezionata viene nascosta, resetta alla prima visibile
     if (!_visibleColumns.contains(_searchColumn) && displayColumns.isNotEmpty) {
       _searchColumn = displayColumns.first;
     }
@@ -131,18 +180,11 @@ class _CsvPageState extends State<CsvViewPage> {
         scrolledUnderElevation: 4,
         toolbarHeight: _isSearching ? 80 : 64,
         backgroundColor: _isSelectionMode ? colorScheme.primaryContainer : null,
-        automaticallyImplyLeading: !_isSearching,
-        leading: _isSelectionMode
-            ? IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: () => setState(() => _selectedRows.clear()),
-              )
-            : null,
         title: _isSelectionMode
             ? Text("${_selectedRows.length} selezionati")
             : (_isSearching
-                  ? _buildModernSearchField(colorScheme, displayColumns)
-                  : Text(_currentFileName)),
+                ? _buildModernSearchField(colorScheme, displayColumns)
+                : Text(_currentFileName)),
         actions: [
           if (_isSelectionMode)
             IconButton(
@@ -150,10 +192,9 @@ class _CsvPageState extends State<CsvViewPage> {
               onPressed: _deleteSelectedRows,
             )
           else ...[
+
             IconButton(
-              icon: Icon(
-                _isSearching ? Icons.close_rounded : Icons.search_rounded,
-              ),
+              icon: Icon(_isSearching ? Icons.close_rounded : Icons.search_rounded),
               onPressed: () => setState(() {
                 _isSearching = !_isSearching;
                 if (!_isSearching) {
@@ -163,6 +204,17 @@ class _CsvPageState extends State<CsvViewPage> {
               }),
             ),
             if (!_isSearching) ...[
+              if (_editableColumn != null)
+                IconButton(
+                  icon: const Icon(FontAwesomeIcons.eraser),
+                  tooltip: "Pulisci colonna modificabile",
+                  onPressed: _clearEditableColumn,
+                ),
+              IconButton(
+                icon: const Icon(Icons.picture_as_pdf_rounded),
+                tooltip: "Esporta PDF",
+                onPressed: _handlePdfExport,
+              ),
               IconButton(
                 icon: const Icon(Icons.tune_rounded),
                 onPressed: _showSettings,
@@ -180,7 +232,6 @@ class _CsvPageState extends State<CsvViewPage> {
                       ),
                     ),
                   );
-                  // Se il nome è stato cambiato, aggiorna la UI
                   if (newName != null && mounted) {
                     setState(() {
                       _currentFileName = newName;
@@ -198,8 +249,6 @@ class _CsvPageState extends State<CsvViewPage> {
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: SizedBox(
-                // Definiamo una larghezza minima per forzare lo scroll
-                // (es. 200 pixel per ogni colonna visibile)
                 width: displayColumns.length * 200.0,
                 child: Column(
                   children: [
@@ -209,41 +258,27 @@ class _CsvPageState extends State<CsvViewPage> {
                           ? _buildEmptyState(colorScheme)
                           : ListView.separated(
                               itemCount: _currentData.length,
-                              separatorBuilder: (context, index) =>
-                                  const Divider(height: 1),
+                              separatorBuilder: (context, index) => const Divider(height: 1),
                               itemBuilder: (context, index) {
-                                final realIndex = widget.data.indexOf(
-                                  _currentData[index],
-                                );
-                                final isSelected = _selectedRows.contains(
-                                  realIndex,
-                                );
+                                final realIndex = widget.data.indexOf(_currentData[index]);
+                                final isSelected = _selectedRows.contains(realIndex);
 
                                 return InkWell(
                                   onLongPress: () => _toggleSelection(index),
                                   onTap: _isSelectionMode
                                       ? () => _toggleSelection(index)
                                       : () => Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (_) => CsvDetailPage(
-                                              record: _currentData[index],
-                                              allColumns: _allColumns,
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) => CsvDetailPage(
+                                                record: _currentData[index],
+                                                allColumns: _allColumns,
+                                              ),
                                             ),
                                           ),
-                                        ),
                                   child: Container(
-                                    color: isSelected
-                                        ? colorScheme.primary.withValues(
-                                            alpha: 0.12,
-                                          )
-                                        : null,
-                                    child: _buildRow(
-                                      index,
-                                      displayColumns,
-                                      theme,
-                                      colorScheme,
-                                    ),
+                                    color: isSelected ? colorScheme.primary.withValues(alpha: 0.12) : null,
+                                    child: _buildRow(index, displayColumns, theme, colorScheme),
                                   ),
                                 );
                               },
@@ -293,10 +328,7 @@ class _CsvPageState extends State<CsvViewPage> {
               fontWeight: FontWeight.bold,
             ),
             items: displayColumns
-                .map(
-                  (c) =>
-                      DropdownMenuItem(value: c, child: Text(c.toUpperCase())),
-                )
+                .map((c) => DropdownMenuItem(value: c, child: Text(c.toUpperCase())))
                 .toList(),
             onChanged: (v) => setState(() {
               _searchColumn = v!;
@@ -350,12 +382,7 @@ class _CsvPageState extends State<CsvViewPage> {
     );
   }
 
-  Widget _buildRow(
-    int index,
-    List<String> columns,
-    ThemeData theme,
-    ColorScheme colorScheme,
-  ) {
+  Widget _buildRow(int index, List<String> columns, ThemeData theme, ColorScheme colorScheme) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
@@ -363,36 +390,30 @@ class _CsvPageState extends State<CsvViewPage> {
           ...columns.map((col) {
             final value = _currentData[index][col]?.toString() ?? "";
             if (col == _editableColumn && _columnTypes[col] != 'off') {
+              final cellValue = _currentData[index][col]?.toString() ?? "";
               return Container(
                 width: 200,
                 child: Padding(
                   padding: const EdgeInsets.only(right: 12),
                   child: TextFormField(
-                    initialValue: value,
+                    key: ValueKey("row_${index}_${col}_${cellValue}_$_resetCounter"),                    initialValue: cellValue,
                     keyboardType: _columnTypes[col] == 'int'
                         ? TextInputType.number
                         : _columnTypes[col] == 'double'
-                        ? const TextInputType.numberWithOptions(decimal: true)
-                        : TextInputType.text,
-                    key: Key("row_${index}_$col"),
+                            ? const TextInputType.numberWithOptions(decimal: true)
+                            : TextInputType.text,
                     style: theme.textTheme.bodyMedium,
                     decoration: InputDecoration(
                       filled: true,
                       fillColor: colorScheme.surfaceContainer,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
                         borderSide: BorderSide.none,
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(
-                          color: colorScheme.primary,
-                          width: 1,
-                        ),
+                        borderSide: BorderSide(color: colorScheme.primary, width: 1),
                       ),
                     ),
                     onChanged: (v) {
@@ -412,11 +433,7 @@ class _CsvPageState extends State<CsvViewPage> {
               ),
             );
           }).toList(),
-          Icon(
-            Icons.arrow_forward_ios_rounded,
-            size: 12,
-            color: colorScheme.outlineVariant,
-          ),
+          Icon(Icons.arrow_forward_ios_rounded, size: 12, color: colorScheme.outlineVariant),
         ],
       ),
     );
@@ -427,16 +444,9 @@ class _CsvPageState extends State<CsvViewPage> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.search_off_rounded,
-            size: 64,
-            color: colorScheme.outlineVariant,
-          ),
+          Icon(Icons.search_off_rounded, size: 64, color: colorScheme.outlineVariant),
           const SizedBox(height: 16),
-          Text(
-            "Nessun dato corrispondente",
-            style: TextStyle(color: colorScheme.outline),
-          ),
+          Text("Nessun dato corrispondente", style: TextStyle(color: colorScheme.outline)),
         ],
       ),
     );
@@ -460,9 +470,7 @@ class _CsvPageState extends State<CsvViewPage> {
             children: [
               Text(
                 "Configurazione colonne",
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+                style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 20),
               ..._allColumns.map((col) {
@@ -483,15 +491,10 @@ class _CsvPageState extends State<CsvViewPage> {
                               _autoSave();
                             },
                           ),
-                          title: Text(
-                            col,
-                            style: TextStyle(color: theme.disabledColor),
-                          ),
+                          title: Text(col, style: TextStyle(color: theme.disabledColor)),
                         )
                       : ExpansionTile(
-                          key: Key(
-                            col + (isCurrentlyEditable ? '_open' : '_closed'),
-                          ),
+                          key: Key(col + (isCurrentlyEditable ? '_open' : '_closed')),
                           initiallyExpanded: isCurrentlyEditable,
                           leading: Checkbox(
                             value: true,
@@ -509,10 +512,7 @@ class _CsvPageState extends State<CsvViewPage> {
                           ),
                           title: Text(col),
                           trailing: isCurrentlyEditable
-                              ? Icon(
-                                  Icons.edit_note,
-                                  color: theme.colorScheme.primary,
-                                )
+                              ? Icon(Icons.edit_note, color: theme.colorScheme.primary)
                               : const Icon(Icons.expand_more),
                           children: [
                             Padding(
@@ -523,10 +523,7 @@ class _CsvPageState extends State<CsvViewPage> {
                                   const SizedBox(height: 8),
                                   const Text(
                                     "Tipo di input da tastiera",
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                    ),
+                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                                   ),
                                   const SizedBox(height: 12),
                                   SegmentedButton<String>(
@@ -536,21 +533,10 @@ class _CsvPageState extends State<CsvViewPage> {
                                         label: Text("Disabilitato"),
                                         icon: Icon(Icons.edit_off_sharp),
                                       ),
+                                      ButtonSegment(value: 'text', label: Text("Abc"), icon: Icon(Icons.abc)),
+                                      ButtonSegment(value: 'int', label: Text("123"), icon: Icon(Icons.tag)),
                                       ButtonSegment(
-                                        value: 'text',
-                                        label: Text("Abc"),
-                                        icon: Icon(Icons.abc),
-                                      ),
-                                      ButtonSegment(
-                                        value: 'int',
-                                        label: Text("123"),
-                                        icon: Icon(Icons.tag),
-                                      ),
-                                      ButtonSegment(
-                                        value: 'double',
-                                        label: Text("1.1"),
-                                        icon: Icon(Icons.pin_outlined),
-                                      ),
+                                          value: 'double', label: Text("1.1"), icon: Icon(Icons.pin_outlined)),
                                     ],
                                     selected: {_columnTypes[col]!},
                                     onSelectionChanged: (newVal) {
@@ -573,10 +559,7 @@ class _CsvPageState extends State<CsvViewPage> {
   }
 
   void _addNewRecord() {
-    // Prepariamo una mappa per contenere i nuovi dati
-    final Map<String, dynamic> newRowData = {
-      for (var col in _allColumns) col: "",
-    };
+    final Map<String, dynamic> newRowData = {for (var col in _allColumns) col: ""};
 
     showDialog(
       context: context,
@@ -595,12 +578,11 @@ class _CsvPageState extends State<CsvViewPage> {
                     border: const OutlineInputBorder(),
                     isDense: true,
                   ),
-                  // Seleziona il tipo di tastiera in base alla tua configurazione colonne
                   keyboardType: _columnTypes[col] == 'int'
                       ? TextInputType.number
                       : _columnTypes[col] == 'double'
-                      ? const TextInputType.numberWithOptions(decimal: true)
-                      : TextInputType.text,
+                          ? const TextInputType.numberWithOptions(decimal: true)
+                          : TextInputType.text,
                   onChanged: (value) => newRowData[col] = value,
                 ),
               );
@@ -608,26 +590,18 @@ class _CsvPageState extends State<CsvViewPage> {
           ),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Annulla"),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Annulla")),
           FilledButton(
             onPressed: () {
               setState(() {
-                // Inserisce il nuovo record in cima alla lista
                 widget.data.insert(0, Map<String, dynamic>.from(newRowData));
-
                 if (_isSearching) {
                   _performSearch(_searchController.text);
                 } else {
                   _currentData = List.from(widget.data);
                 }
               });
-
-              // Salva nello storageService usando il fileIndex corretto
               _autoSave();
-
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text("Record aggiunto con successo")),
@@ -641,9 +615,7 @@ class _CsvPageState extends State<CsvViewPage> {
   }
 
   void _toggleSelection(int indexInCurrent) {
-    // Troviamo l'indice reale nel widget.data originale
     final realIndex = widget.data.indexOf(_currentData[indexInCurrent]);
-
     setState(() {
       if (_selectedRows.contains(realIndex)) {
         _selectedRows.remove(realIndex);
@@ -658,33 +630,24 @@ class _CsvPageState extends State<CsvViewPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text("Elimina record"),
-        content: Text(
-          "Vuoi eliminare ${_selectedRows.length} record selezionati?",
-        ),
+        content: Text("Vuoi eliminare ${_selectedRows.length} record selezionati?"),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Annulla"),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Annulla")),
           FilledButton(
             onPressed: () {
               setState(() {
-                // Ordiniamo gli indici dal più grande al più piccolo per evitare errori di spostamento lista
-                final sortedIndices = _selectedRows.toList()
-                  ..sort((a, b) => b.compareTo(a));
+                final sortedIndices = _selectedRows.toList()..sort((a, b) => b.compareTo(a));
                 for (var index in sortedIndices) {
                   widget.data.removeAt(index);
                 }
                 _selectedRows.clear();
-
-                // Aggiorna la vista corrente (filtri inclusi)
                 if (_isSearching) {
                   _performSearch(_searchController.text);
                 } else {
                   _currentData = List.from(widget.data);
                 }
               });
-              _autoSave(); // Persistenza multi-file
+              _autoSave();
               Navigator.pop(context);
             },
             child: const Text("Elimina"),
