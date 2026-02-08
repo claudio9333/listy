@@ -246,8 +246,7 @@ class _CsvPageState extends State<CsvViewPage> {
                 icon: const Icon(Icons.delete_sweep_rounded),
                 onPressed: _deleteSelectedRows,
               )
-            else
-            // Lasciamo solo la ricerca nella barra superiore
+            else ...[
               IconButton(
                 icon: Icon(_isSearching ? Icons.close_rounded : Icons.search_rounded),
                 onPressed: () => setState(() {
@@ -258,6 +257,13 @@ class _CsvPageState extends State<CsvViewPage> {
                   }
                 }),
               ),
+              if (_editableColumn != null && !_isSearching)
+                IconButton(
+                  tooltip: "Pulisci colonna '$_editableColumn'",
+                  icon: const Icon(FontAwesomeIcons.eraser, size: 20),
+                  onPressed: _clearEditableColumn,
+                ),
+            ]
           ],
         ),
         body: Column(
@@ -361,16 +367,6 @@ class _CsvPageState extends State<CsvViewPage> {
               ),
             ),
           ),
-          if (_editableColumn != null)
-            ListTile(
-              leading: const Icon(FontAwesomeIcons.eraser),
-              title: const Text("Pulisci colonna"),
-              subtitle: Text("Svuota '$_editableColumn'"),
-              onTap: () {
-                Navigator.pop(context);
-                _clearEditableColumn();
-              },
-            ),
           ListTile(
             leading: const Icon(Icons.picture_as_pdf_rounded),
             title: const Text("Esporta PDF"),
