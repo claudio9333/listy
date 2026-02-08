@@ -199,6 +199,10 @@ class _CsvPageState extends State<CsvViewPage> {
     }
 
     try {
+      final String? csvExtension = '.csv';
+      if (_currentFileName.contains(csvExtension!)) {
+        _currentFileName = _currentFileName.replaceAll(csvExtension, '');
+      }
       if (kIsWeb) {
         // --- LOGICA WEB: Download tramite browser ---
         final bytes = utf8.encode(csvString);
