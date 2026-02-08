@@ -44,10 +44,11 @@ class _CsvPickerScreenState extends State<CsvPickerScreen> {
       setState(() => _isLoading = true);
 
       final name = result.files.single.name;
+      final path = result.files.single.path;
       final bytes = result.files.single.bytes!;
       final parsedData = _csvService.parseCsvFromBytes(bytes);
 
-      await _storageService.addFile(name, parsedData);
+      await _storageService.addFile(name, parsedData, path);
       _refreshData();
       setState(() => _isLoading = false);
     }
@@ -93,32 +94,29 @@ class _CsvPickerScreenState extends State<CsvPickerScreen> {
               onTap: () async {
                 final List<Map<String, dynamic>> allFiles = await _storageService.getAllFiles();
                 final fileMap = allFiles[index];
-
-                if (fileMap != null) {
-                  // 1. Aspetta che l'utente chiuda la pagina CsvViewPage
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => CsvViewPage(
-                        fileName: fileMap['name'],
-                        data: List<Map<String, dynamic>>.from(fileMap['data']),
-                        initialEditableColumn: fileMap['editableColumn'],
-                        initialVisibleColumns: fileMap['visibleColumns'] != null
-                            ? List<String>.from(fileMap['visibleColumns'])
-                            : null,
-                        initialColumnTypes: fileMap['columnTypes'] != null
-                            ? Map<String, String>.from(fileMap['columnTypes'])
-                            : {},
-                        storageService: _storageService,
-                        fileIndex: index,
-                      ),
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => CsvViewPage(
+                      fileName: fileMap['name'],
+                      path: fileMap['path'],
+                      data: List<Map<String, dynamic>>.from(fileMap['data']),
+                      initialEditableColumn: fileMap['editableColumn'],
+                      initialVisibleColumns: fileMap['visibleColumns'] != null
+                          ? List<String>.from(fileMap['visibleColumns'])
+                          : null,
+                      initialColumnTypes: fileMap['columnTypes'] != null
+                          ? Map<String, String>.from(fileMap['columnTypes'])
+                          : {},
+                      storageService: _storageService,
+                      fileIndex: index,
                     ),
-                  );
+                  ),
+                );
 
-                  // 2. Quando l'utente torna indietro, aggiorna la lista dei file
-                  _refreshData();
-                }
-              },
+                // 2. Quando l'utente torna indietro, aggiorna la lista dei file
+                _refreshData();
+                            },
             ),
           );
         },

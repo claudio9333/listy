@@ -1,11 +1,18 @@
+import 'dart:developer' as developer;
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+import '../service/csv_service.dart';
 import '../service/pdf_service.dart';
 import 'csv_detalis_page.dart';
 import 'file_settings_page.dart';
+import 'package:flutter/foundation.dart';
 
 class CsvViewPage extends StatefulWidget {
   final String fileName;
+  final String? path;
   final List<Map<String, dynamic>> data;
   final String? initialEditableColumn;
   final List<String>? initialVisibleColumns;
@@ -16,6 +23,7 @@ class CsvViewPage extends StatefulWidget {
   const CsvViewPage({
     super.key,
     required this.fileName,
+    this.path,
     required this.data,
     this.initialEditableColumn,
     this.initialVisibleColumns,
@@ -36,6 +44,7 @@ class _CsvPageState extends State<CsvViewPage> {
   String? _editableColumn;
   final Set<int> _selectedRows = {};
   final PdfService _pdfService = PdfService();
+  final CsvService _csvService = CsvService();
 
   bool get _isSelectionMode => _selectedRows.isNotEmpty;
   late String _currentFileName;
@@ -81,18 +90,33 @@ class _CsvPageState extends State<CsvViewPage> {
   }
 
   void _autoSave() async {
-    final List<Map<String, dynamic>> allFiles = await widget.storageService.getAllFiles();
+    try {
+      final List<Map<String, dynamic>> allFiles = await widget.storageService.getAllFiles();
+      if (widget.fileIndex >= 0 && widget.fileIndex < allFiles.length) {
+        allFiles[widget.fileIndex] = {
+          'name': _currentFileName,
+          'data': widget.data,
+          'path': widget.path,
+          'editableColumn': _editableColumn,
+          'visibleColumns': _visibleColumns.toList(),
+          'columnTypes': _columnTypes,
+        };
+        await widget.storageService.saveAllFiles(allFiles);
+      }
+    } catch (e) {
+      debugPrint("Errore SharedPreferences: $e");
+    }
 
-    if (widget.fileIndex < allFiles.length) {
-      allFiles[widget.fileIndex] = {
-        'name': widget.fileName,
-        'data': _currentData,
-        'editableColumn': _editableColumn,
-        'visibleColumns': _visibleColumns.toList(),
-        'columnTypes': _columnTypes,
-      };
-
-      await widget.storageService.saveAllFiles(allFiles);
+    if (!kIsWeb && widget.path != null && widget.path!.isNotEmpty) {
+      if (widget.path!.startsWith('/') || widget.path!.contains(':')) {
+        try {
+          final String csvString = _csvService.mapToCsv(widget.data, _allColumns);
+          final File file = File(widget.path!);
+          await file.writeAsString(csvString);
+        } catch (e) {
+          debugPrint("Salvataggio fisico non riuscito: $e");
+        }
+      }
     }
   }
 
@@ -112,7 +136,6 @@ class _CsvPageState extends State<CsvViewPage> {
 
   void _clearEditableColumn() {
     if (_editableColumn == null) return;
-
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -126,7 +149,7 @@ class _CsvPageState extends State<CsvViewPage> {
                 for (var row in widget.data) {
                   row[_editableColumn!] = "";
                 }
-                _resetCounter++; // <--- Incrementa qui per forzare il cambio della Key
+                _resetCounter++;
                 if (_isSearching) {
                   _performSearch(_searchController.text);
                 } else {
@@ -147,14 +170,10 @@ class _CsvPageState extends State<CsvViewPage> {
     final visibleColumnsList = _allColumns.where((col) => _visibleColumns.contains(col)).toList();
     final filteredData = widget.data.where((row) {
       if (_editableColumn == null) return true;
-
       final value = row[_editableColumn];
       if (value == null) return false;
       final String strValue = value.toString().trim();
-      if (strValue == "" || strValue == "0" || strValue == "0.0") {
-        return false;
-      }
-      return true;
+      return strValue != "" && strValue != "0" && strValue != "0.0";
     }).toList();
 
     await _pdfService.generateAndPrintPdf(
@@ -162,6 +181,25 @@ class _CsvPageState extends State<CsvViewPage> {
       visibleColumnsList,
       filteredData,
     );
+  }
+
+  Future<void> _exportUpdatedCsv() async {
+    final String csvString = _csvService.mapToCsv(widget.data, _allColumns);
+    if (csvString.isEmpty) return;
+    try {
+      final directory = await getTemporaryDirectory();
+      final path = "${directory.path}/$_currentFileName.csv";
+      final file = File(path);
+      await file.writeAsString(csvString);
+      await Share.shareXFiles([XFile(path)], text: 'Esporta CSV aggiornato');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Da implementare...")),
+        );
+        developer.log("Errore durante l'esportazione: $e");
+      }
+    }
   }
 
   @override
@@ -174,130 +212,215 @@ class _CsvPageState extends State<CsvViewPage> {
       _searchColumn = displayColumns.first;
     }
 
-    return Scaffold(
-      backgroundColor: colorScheme.surface,
-      appBar: AppBar(
-        scrolledUnderElevation: 4,
-        toolbarHeight: _isSearching ? 80 : 64,
-        backgroundColor: _isSelectionMode ? colorScheme.primaryContainer : null,
-        title: _isSelectionMode
-            ? Text("${_selectedRows.length} selezionati")
-            : (_isSearching
-                ? _buildModernSearchField(colorScheme, displayColumns)
-                : Text(_currentFileName)),
-        actions: [
-          if (_isSelectionMode)
-            IconButton(
-              icon: const Icon(Icons.delete_sweep_rounded),
-              onPressed: _deleteSelectedRows,
-            )
-          else ...[
-
-            IconButton(
-              icon: Icon(_isSearching ? Icons.close_rounded : Icons.search_rounded),
-              onPressed: () => setState(() {
-                _isSearching = !_isSearching;
-                if (!_isSearching) {
-                  _searchController.clear();
-                  _currentData = List.from(widget.data);
-                }
-              }),
-            ),
-            if (!_isSearching) ...[
-              if (_editableColumn != null)
-                IconButton(
-                  icon: const Icon(FontAwesomeIcons.eraser),
-                  tooltip: "Pulisci colonna modificabile",
-                  onPressed: _clearEditableColumn,
-                ),
+    return PopScope(
+      canPop: !_isSearching && !_isSelectionMode,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        if (_isSearching) {
+          setState(() {
+            _isSearching = false;
+            _searchController.clear();
+            _currentData = List.from(widget.data);
+          });
+        } else if (_isSelectionMode) {
+          setState(() => _selectedRows.clear());
+        }
+      },
+      child: Scaffold(
+        backgroundColor: colorScheme.surface,
+        // Menu laterale con tutte le azioni
+        drawer: _buildDrawer(theme, colorScheme),
+        appBar: AppBar(
+          automaticallyImplyLeading: !_isSearching, // Nasconde l'hamburger durante la ricerca
+          scrolledUnderElevation: 4,
+          toolbarHeight: _isSearching ? 80 : 64,
+          backgroundColor: _isSelectionMode ? colorScheme.primaryContainer : null,
+          title: _isSelectionMode
+              ? Text("${_selectedRows.length} selezionati")
+              : (_isSearching
+              ? _buildModernSearchField(colorScheme, displayColumns)
+              : Text(_currentFileName)),
+          actions: [
+            if (_isSelectionMode)
               IconButton(
-                icon: const Icon(Icons.picture_as_pdf_rounded),
-                tooltip: "Esporta PDF",
-                onPressed: _handlePdfExport,
-              ),
+                icon: const Icon(Icons.delete_sweep_rounded),
+                onPressed: _deleteSelectedRows,
+              )
+            else
+            // Lasciamo solo la ricerca nella barra superiore
               IconButton(
-                icon: const Icon(Icons.tune_rounded),
-                onPressed: _showSettings,
-              ),
-              IconButton(
-                icon: const Icon(Icons.settings_rounded),
-                onPressed: () async {
-                  final newName = await Navigator.push<String>(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => FileSettingsPage(
-                        currentName: widget.fileName,
-                        fileIndex: widget.fileIndex,
-                        storageService: widget.storageService,
-                      ),
-                    ),
-                  );
-                  if (newName != null && mounted) {
-                    setState(() {
-                      _currentFileName = newName;
-                    });
+                icon: Icon(_isSearching ? Icons.close_rounded : Icons.search_rounded),
+                onPressed: () => setState(() {
+                  _isSearching = !_isSearching;
+                  if (!_isSearching) {
+                    _searchController.clear();
+                    _currentData = List.from(widget.data);
                   }
-                },
+                }),
               ),
-            ],
           ],
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SizedBox(
-                width: displayColumns.length * 200.0,
-                child: Column(
-                  children: [
-                    _buildHeader(displayColumns, colorScheme, theme),
-                    Expanded(
-                      child: _currentData.isEmpty
-                          ? _buildEmptyState(colorScheme)
-                          : ListView.separated(
-                              itemCount: _currentData.length,
-                              separatorBuilder: (context, index) => const Divider(height: 1),
-                              itemBuilder: (context, index) {
-                                final realIndex = widget.data.indexOf(_currentData[index]);
-                                final isSelected = _selectedRows.contains(realIndex);
+        ),
+        body: Column(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: displayColumns.length * 200.0,
+                  child: Column(
+                    children: [
+                      _buildHeader(displayColumns, colorScheme, theme),
+                      Expanded(
+                        child: _currentData.isEmpty
+                            ? _buildEmptyState(colorScheme)
+                            : ListView.separated(
+                          itemCount: _currentData.length,
+                          separatorBuilder: (context, index) => const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final realIndex = widget.data.indexOf(_currentData[index]);
+                            final isSelected = _selectedRows.contains(realIndex);
 
-                                return InkWell(
-                                  onLongPress: () => _toggleSelection(index),
-                                  onTap: _isSelectionMode
-                                      ? () => _toggleSelection(index)
-                                      : () => Navigator.push(
-                                            context,
-                                            MaterialPageRoute(
-                                              builder: (_) => CsvDetailPage(
-                                                record: _currentData[index],
-                                                allColumns: _allColumns,
-                                              ),
-                                            ),
-                                          ),
-                                  child: Container(
-                                    color: isSelected ? colorScheme.primary.withValues(alpha: 0.12) : null,
-                                    child: _buildRow(index, displayColumns, theme, colorScheme),
+                            return InkWell(
+                              onLongPress: () => _toggleSelection(index),
+                              onTap: _isSelectionMode
+                                  ? () => _toggleSelection(index)
+                                  : () async {
+                                // Aspettiamo il risultato dal Navigator. Se è 'true', il record è stato eliminato.
+                                final bool? result = await Navigator.push<bool>(
+                                  context,MaterialPageRoute(
+                                  builder: (_) => CsvDetailPage(
+                                    record: _currentData[index],
+                                    allColumns: _allColumns,
+                                    fileName: _currentFileName,
+                                    path: widget.path,
+                                    fileIndex: widget.fileIndex,
+                                    storageService: widget.storageService,
                                   ),
+                                ),
                                 );
+
+                                if (result == true && mounted) {
+                                  // Se il record è stato eliminato, lo rimuoviamo dalle liste locali e aggiorniamo la UI
+                                  setState(() {
+                                    final recordToRemove = _currentData[index];
+                                    widget.data.remove(recordToRemove); // Rimuove dalla lista completa
+                                    _currentData.removeAt(index);       // Rimuove dalla vista attuale (anche se filtrata)
+                                  });
+                                } else {
+                                  // Se è stato solo modificato o semplicemente chiuso, rinfreschiamo comunque la UI
+                                  setState(() {});
+                                }
                               },
-                            ),
-                    ),
-                  ],
+                              child: Container(
+                                color: isSelected ? colorScheme.primary.withValues(alpha: 0.12) : null,
+                                child: _buildRow(index, displayColumns, theme, colorScheme),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
+              ),
+            ),
+          ],
+        ),
+        floatingActionButton: _isSelectionMode
+            ? null
+            : FloatingActionButton.extended(
+          onPressed: _addNewRecord,
+          icon: const Icon(Icons.add_rounded),
+          label: const Text("Nuovo Record"),
+        ),
+      ),
+    );
+  }
+
+  // Costruzione del Menu Laterale (Drawer)
+  Widget _buildDrawer(ThemeData theme, ColorScheme colorScheme) {
+    return Drawer(
+      child: Column(
+        children: [
+          DrawerHeader(
+            decoration: BoxDecoration(color: colorScheme.primaryContainer),
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(FontAwesomeIcons.fileCsv, size: 40, color: colorScheme.primary),
+                  const SizedBox(height: 12),
+                  Text(
+                    _currentFileName,
+                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
               ),
             ),
           ),
+          if (_editableColumn != null)
+            ListTile(
+              leading: const Icon(FontAwesomeIcons.eraser),
+              title: const Text("Pulisci colonna"),
+              subtitle: Text("Svuota '$_editableColumn'"),
+              onTap: () {
+                Navigator.pop(context);
+                _clearEditableColumn();
+              },
+            ),
+          ListTile(
+            leading: const Icon(Icons.picture_as_pdf_rounded),
+            title: const Text("Esporta PDF"),
+            onTap: () {
+              Navigator.pop(context);
+              _handlePdfExport();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.file_download_rounded),
+            title: const Text("Scarica CSV"),
+            onTap: () {
+              Navigator.pop(context);
+              _exportUpdatedCsv();
+            },
+          ),
+          const Spacer(),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.tune_rounded),
+            title: const Text("Configura colonne"),
+            onTap: () {
+              Navigator.pop(context);
+              _showSettings();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.settings_rounded),
+            title: const Text("Impostazioni file"),
+            onTap: () async {
+              Navigator.pop(context);
+              final newName = await Navigator.push<String>(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => FileSettingsPage(
+                    currentName: _currentFileName,
+                    fileIndex: widget.fileIndex,
+                    storageService: widget.storageService,
+                  ),
+                ),
+              );
+              if (newName != null && mounted) {
+                setState(() => _currentFileName = newName);
+                _autoSave();
+              }
+            },
+          ),
+          const SizedBox(height: 8),
         ],
       ),
-      floatingActionButton: _isSelectionMode
-          ? null
-          : FloatingActionButton.extended(
-              onPressed: _addNewRecord,
-              icon: const Icon(Icons.add_rounded),
-              label: const Text("Nuovo Record"),
-            ),
     );
   }
 
@@ -309,13 +432,13 @@ class _CsvPageState extends State<CsvViewPage> {
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 10,
             offset: const Offset(0, 2),
           ),
         ],
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Row(
         children: [
           DropdownButton<String>(
@@ -359,24 +482,20 @@ class _CsvPageState extends State<CsvViewPage> {
       padding: const EdgeInsets.fromLTRB(24, 16, 48, 16),
       decoration: BoxDecoration(
         color: colorScheme.primary.withValues(alpha: 0.1),
-        border: Border(
-          bottom: BorderSide(color: colorScheme.outlineVariant, width: 0.5),
-        ),
+        border: Border(bottom: BorderSide(color: colorScheme.outlineVariant, width: 0.5)),
       ),
       child: Row(
         children: columns
-            .map(
-              (col) => Expanded(
-                child: Text(
-                  col.toUpperCase(),
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: colorScheme.primary.withValues(alpha: 0.8),
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.1,
-                  ),
-                ),
-              ),
-            )
+            .map((col) => Expanded(
+          child: Text(
+            col.toUpperCase(),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: colorScheme.primary.withValues(alpha: 0.8),
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.1,
+            ),
+          ),
+        ))
             .toList(),
       ),
     );
@@ -388,48 +507,39 @@ class _CsvPageState extends State<CsvViewPage> {
       child: Row(
         children: [
           ...columns.map((col) {
-            final value = _currentData[index][col]?.toString() ?? "";
+            final cellValue = _currentData[index][col]?.toString() ?? "";
             if (col == _editableColumn && _columnTypes[col] != 'off') {
-              final cellValue = _currentData[index][col]?.toString() ?? "";
               return Container(
                 width: 200,
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 12),
-                  child: TextFormField(
-                    key: ValueKey("row_${index}_${col}_${cellValue}_$_resetCounter"),                    initialValue: cellValue,
-                    keyboardType: _columnTypes[col] == 'int'
-                        ? TextInputType.number
-                        : _columnTypes[col] == 'double'
-                            ? const TextInputType.numberWithOptions(decimal: true)
-                            : TextInputType.text,
-                    style: theme.textTheme.bodyMedium,
-                    decoration: InputDecoration(
-                      filled: true,
-                      fillColor: colorScheme.surfaceContainer,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: colorScheme.primary, width: 1),
-                      ),
-                    ),
-                    onChanged: (v) {
-                      _currentData[index][col] = v;
-                      _autoSave();
-                    },
+                padding: const EdgeInsets.only(right: 12),
+                child: TextFormField(
+                  key: ValueKey("row_${index}_${col}_${cellValue}_$_resetCounter"),
+                  initialValue: cellValue,
+                  keyboardType: _columnTypes[col] == 'int'
+                      ? TextInputType.number
+                      : _columnTypes[col] == 'double'
+                      ? const TextInputType.numberWithOptions(decimal: true)
+                      : TextInputType.text,
+                  style: theme.textTheme.bodyMedium,
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: colorScheme.surfaceContainer,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: colorScheme.primary)),
                   ),
+                  onChanged: (v) {
+                    _currentData[index][col] = v;
+                    _autoSave();
+                  },
                 ),
               );
             }
             return Expanded(
               child: Text(
-                value,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurface.withOpacity(0.8),
-                ),
+                cellValue,
+                style: theme.textTheme.bodyMedium?.copyWith(color: colorScheme.onSurface.withOpacity(0.8)),
               ),
             );
           }).toList(),
@@ -457,9 +567,7 @@ class _CsvPageState extends State<CsvViewPage> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
       builder: (context) => StatefulBuilder(
         builder: (context, setST) => DraggableScrollableSheet(
           initialChildSize: 0.7,
@@ -468,87 +576,62 @@ class _CsvPageState extends State<CsvViewPage> {
             controller: controller,
             padding: const EdgeInsets.all(24),
             children: [
-              Text(
-                "Configurazione colonne",
-                style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
-              ),
+              Text("Configurazione colonne", style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
               const SizedBox(height: 20),
               ..._allColumns.map((col) {
                 final isVisible = _visibleColumns.contains(col);
                 final isCurrentlyEditable = _editableColumn == col;
-
                 return Card(
                   elevation: 0,
                   color: theme.colorScheme.surfaceContainerLow,
                   margin: const EdgeInsets.only(bottom: 12),
                   child: !isVisible
                       ? ListTile(
-                          leading: Checkbox(
-                            value: false,
-                            onChanged: (v) {
-                              setState(() => _visibleColumns.add(col));
-                              setST(() {});
-                              _autoSave();
-                            },
-                          ),
-                          title: Text(col, style: TextStyle(color: theme.disabledColor)),
-                        )
+                    leading: Checkbox(
+                        value: false,
+                        onChanged: (v) {
+                          setState(() => _visibleColumns.add(col));
+                          setST(() {});
+                          _autoSave();
+                        }),
+                    title: Text(col, style: TextStyle(color: theme.disabledColor)),
+                  )
                       : ExpansionTile(
-                          key: Key(col + (isCurrentlyEditable ? '_open' : '_closed')),
-                          initiallyExpanded: isCurrentlyEditable,
-                          leading: Checkbox(
-                            value: true,
-                            onChanged: (v) {
-                              setState(() {
-                                _visibleColumns.remove(col);
-                                if (_editableColumn == col) {
-                                  _editableColumn = null;
-                                  _columnTypes[col] = 'off';
-                                }
-                              });
-                              setST(() {});
-                              _autoSave();
-                            },
-                          ),
-                          title: Text(col),
-                          trailing: isCurrentlyEditable
-                              ? Icon(Icons.edit_note, color: theme.colorScheme.primary)
-                              : const Icon(Icons.expand_more),
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                              child: Column(
-                                children: [
-                                  const Divider(),
-                                  const SizedBox(height: 8),
-                                  const Text(
-                                    "Tipo di input da tastiera",
-                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  SegmentedButton<String>(
-                                    segments: const [
-                                      ButtonSegment(
-                                        value: 'off',
-                                        label: Text("Disabilitato"),
-                                        icon: Icon(Icons.edit_off_sharp),
-                                      ),
-                                      ButtonSegment(value: 'text', label: Text("Abc"), icon: Icon(Icons.abc)),
-                                      ButtonSegment(value: 'int', label: Text("123"), icon: Icon(Icons.tag)),
-                                      ButtonSegment(
-                                          value: 'double', label: Text("1.1"), icon: Icon(Icons.pin_outlined)),
-                                    ],
-                                    selected: {_columnTypes[col]!},
-                                    onSelectionChanged: (newVal) {
-                                      _updateEditableType(col, newVal.first);
-                                      setST(() {});
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ),
+                    key: Key(col + (isCurrentlyEditable ? '_open' : '_closed')),
+                    initiallyExpanded: isCurrentlyEditable,
+                    leading: Checkbox(
+                        value: true,
+                        onChanged: (v) {
+                          setState(() {
+                            _visibleColumns.remove(col);
+                            if (_editableColumn == col) {
+                              _editableColumn = null;
+                              _columnTypes[col] = 'off';
+                            }
+                          });
+                          setST(() {});
+                          _autoSave();
+                        }),
+                    title: Text(col),
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                        child: SegmentedButton<String>(
+                          segments: const [
+                            ButtonSegment(value: 'off', label: Text("Off"), icon: Icon(Icons.edit_off)),
+                            ButtonSegment(value: 'text', label: Text("Abc"), icon: Icon(Icons.abc)),
+                            ButtonSegment(value: 'int', label: Text("123"), icon: Icon(Icons.tag)),
+                            ButtonSegment(value: 'double', label: Text("1.1"), icon: Icon(Icons.pin_outlined)),
                           ],
+                          selected: {_columnTypes[col]!},
+                          onSelectionChanged: (newVal) {
+                            _updateEditableType(col, newVal.first);
+                            setST(() {});
+                          },
                         ),
+                      ),
+                    ],
+                  ),
                 );
               }).toList(),
             ],
@@ -560,33 +643,21 @@ class _CsvPageState extends State<CsvViewPage> {
 
   void _addNewRecord() {
     final Map<String, dynamic> newRowData = {for (var col in _allColumns) col: ""};
-
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text("Aggiungi Nuovo Record"),
+        title: const Text("Nuovo Record"),
         content: SizedBox(
           width: double.maxFinite,
           child: ListView(
             shrinkWrap: true,
-            children: _allColumns.map((col) {
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12.0),
-                child: TextFormField(
-                  decoration: InputDecoration(
-                    labelText: col.toUpperCase(),
-                    border: const OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  keyboardType: _columnTypes[col] == 'int'
-                      ? TextInputType.number
-                      : _columnTypes[col] == 'double'
-                          ? const TextInputType.numberWithOptions(decimal: true)
-                          : TextInputType.text,
-                  onChanged: (value) => newRowData[col] = value,
-                ),
-              );
-            }).toList(),
+            children: _allColumns.map((col) => Padding(
+              padding: const EdgeInsets.only(bottom: 12.0),
+              child: TextFormField(
+                decoration: InputDecoration(labelText: col.toUpperCase(), border: const OutlineInputBorder()),
+                onChanged: (value) => newRowData[col] = value,
+              ),
+            )).toList(),
           ),
         ),
         actions: [
@@ -595,19 +666,12 @@ class _CsvPageState extends State<CsvViewPage> {
             onPressed: () {
               setState(() {
                 widget.data.insert(0, Map<String, dynamic>.from(newRowData));
-                if (_isSearching) {
-                  _performSearch(_searchController.text);
-                } else {
-                  _currentData = List.from(widget.data);
-                }
+                _currentData = List.from(widget.data);
               });
               _autoSave();
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("Record aggiunto con successo")),
-              );
             },
-            child: const Text("Conferma"),
+            child: const Text("Aggiungi"),
           ),
         ],
       ),
@@ -641,11 +705,7 @@ class _CsvPageState extends State<CsvViewPage> {
                   widget.data.removeAt(index);
                 }
                 _selectedRows.clear();
-                if (_isSearching) {
-                  _performSearch(_searchController.text);
-                } else {
-                  _currentData = List.from(widget.data);
-                }
+                _currentData = List.from(widget.data);
               });
               _autoSave();
               Navigator.pop(context);
