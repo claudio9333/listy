@@ -159,7 +159,7 @@ class _CsvDetailPageState extends State<CsvDetailPage> {
         actions: [
           if (!_isEditing) ...[
             IconButton(
-              icon: const Icon(Icons.delete_outline_rounded, color: Colors.redAccent),
+              icon: const Icon(Icons.delete_outline_rounded),
               tooltip: "Elimina record",
               onPressed: _deleteRecord,
             ),

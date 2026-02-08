@@ -4,20 +4,25 @@ import 'dart:developer' as developer;
 import 'package:csv/csv.dart';
 
 class CsvService {
-  final String _fieldDelimiter = ',';
-  final String _eol = '\n';
-
-  List<Map<String, dynamic>> parseCsvFromBytes(Uint8List bytes) {
+  List<Map<String, dynamic>> parseCsvFromBytes(Uint8List bytes, {String fieldDelimiter = ',', String eol = '\n'}) {
     try {
-
       String csvString = utf8.decode(bytes);
+      return parseCsvFromString(csvString, fieldDelimiter: fieldDelimiter, eol: eol);
+    } catch (e) {
+      developer.log('Errore durante la decodifica dei bytes: $e');
+      return [];
+    }
+  }
+
+  List<Map<String, dynamic>> parseCsvFromString(String csvString, {String fieldDelimiter = ',', String eol = '\n'}) {
+    try {
       if (csvString.startsWith('\uFEFF')) {
         csvString = csvString.substring(1);
       }
 
       List<List<dynamic>> fields = CsvToListConverter(
-        fieldDelimiter: _fieldDelimiter,
-        eol: _eol,
+        fieldDelimiter: fieldDelimiter,
+        eol: eol,
         shouldParseNumbers: true,
       ).convert(csvString);
 
@@ -49,7 +54,7 @@ class CsvService {
     }
   }
 
-  String mapToCsv(List<Map<String, dynamic>> data, List<String> headers) {
+  String mapToCsv(List<Map<String, dynamic>> data, List<String> headers, {String fieldDelimiter = ',', String eol = '\n'}) {
     try {
       List<List<dynamic>> rows = [];
       rows.add(headers);
@@ -58,8 +63,8 @@ class CsvService {
         rows.add(row);
       }
       return ListToCsvConverter(
-        fieldDelimiter: _fieldDelimiter,
-        eol: _eol,
+        fieldDelimiter: fieldDelimiter,
+        eol: eol,
       ).convert(rows);
     } catch (e) {
       developer.log('Errore durante la generazione del CSV: $e');

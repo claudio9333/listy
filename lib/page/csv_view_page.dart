@@ -1,14 +1,17 @@
+import 'dart:convert';
 import 'dart:developer' as developer;
+import 'dart:html' as html if (dart.library.io) 'dart:io';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:listy/service/storega_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../service/csv_service.dart';
 import '../service/pdf_service.dart';
 import 'csv_detalis_page.dart';
 import 'file_settings_page.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 class CsvViewPage extends StatefulWidget {
   final String fileName;
@@ -17,7 +20,7 @@ class CsvViewPage extends StatefulWidget {
   final String? initialEditableColumn;
   final List<String>? initialVisibleColumns;
   final Map<String, String>? initialColumnTypes;
-  final dynamic storageService;
+  final StorageService storageService;
   final int fileIndex;
 
   const CsvViewPage({
@@ -184,21 +187,49 @@ class _CsvPageState extends State<CsvViewPage> {
   }
 
   Future<void> _exportUpdatedCsv() async {
+    // 1. Genera la stringa CSV dai dati attuali
     final String csvString = _csvService.mapToCsv(widget.data, _allColumns);
-    if (csvString.isEmpty) return;
+    if (csvString.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Nessun dato da esportare")),
+        );
+      }
+      return;
+    }
+
     try {
-      final directory = await getTemporaryDirectory();
-      final path = "${directory.path}/$_currentFileName.csv";
-      final file = File(path);
-      await file.writeAsString(csvString);
-      await Share.shareXFiles([XFile(path)], text: 'Esporta CSV aggiornato');
+      if (kIsWeb) {
+        // --- LOGICA WEB: Download tramite browser ---
+        final bytes = utf8.encode(csvString);
+        final blob = html.Blob([bytes], 'text/csv');
+        final url = html.Url.createObjectUrlFromBlob(blob);
+        final anchor = html.AnchorElement(href: url)
+          ..setAttribute("download", "$_currentFileName.csv")
+          ..click();
+        html.Url.revokeObjectUrl(url);
+      } else {
+        // --- LOGICA MOBILE: Condivisione file ---
+        final directory = await getTemporaryDirectory();
+        final path = "${directory.path}/$_currentFileName.csv";
+        final file = File(path);
+
+        // Scrive il file fisicamente nella cache temporanea
+        await file.writeAsString(csvString);
+
+        // Apre il menu di condivisione di sistema
+        await Share.shareXFiles(
+            [XFile(path)],
+            text: 'Esporta CSV aggiornato: $_currentFileName'
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Da implementare...")),
+          SnackBar(content: Text("Errore durante l'esportazione: $e")),
         );
-        developer.log("Errore durante l'esportazione: $e");
       }
+      debugPrint("Errore esportazione: $e");
     }
   }
 
@@ -206,7 +237,7 @@ class _CsvPageState extends State<CsvViewPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final displayColumns = _allColumns.where((col) => _visibleColumns.contains(col)).toList();
+    final displayColumns = _allColumns;
 
     if (!_visibleColumns.contains(_searchColumn) && displayColumns.isNotEmpty) {
       _searchColumn = displayColumns.first;
@@ -231,9 +262,9 @@ class _CsvPageState extends State<CsvViewPage> {
         // Menu laterale con tutte le azioni
         drawer: _buildDrawer(theme, colorScheme),
         appBar: AppBar(
-          automaticallyImplyLeading: !_isSearching, // Nasconde l'hamburger durante la ricerca
+          automaticallyImplyLeading: !_isSearching,
           scrolledUnderElevation: 4,
-          toolbarHeight: _isSearching ? 80 : 64,
+          toolbarHeight: 80,
           backgroundColor: _isSelectionMode ? colorScheme.primaryContainer : null,
           title: _isSelectionMode
               ? Text("${_selectedRows.length} selezionati")
@@ -241,11 +272,16 @@ class _CsvPageState extends State<CsvViewPage> {
               ? _buildModernSearchField(colorScheme, displayColumns)
               : Text(_currentFileName)),
           actions: [
-            if (_isSelectionMode)
+            if (_isSelectionMode) ...[
               IconButton(
                 icon: const Icon(Icons.delete_sweep_rounded),
                 onPressed: _deleteSelectedRows,
-              )
+              ),
+              IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => setState(() => _selectedRows.clear()),
+                )
+            ]
             else ...[
               IconButton(
                 icon: Icon(_isSearching ? Icons.close_rounded : Icons.search_rounded),
@@ -285,7 +321,6 @@ class _CsvPageState extends State<CsvViewPage> {
                           itemBuilder: (context, index) {
                             final realIndex = widget.data.indexOf(_currentData[index]);
                             final isSelected = _selectedRows.contains(realIndex);
-
                             return InkWell(
                               onLongPress: () => _toggleSelection(index),
                               onTap: _isSelectionMode
@@ -368,6 +403,15 @@ class _CsvPageState extends State<CsvViewPage> {
             ),
           ),
           ListTile(
+            leading: const Icon(Icons.home),
+            title: const Text("Le mie liste"),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.pop(context);
+            },
+          ),
+          const Divider(),
+          ListTile(
             leading: const Icon(Icons.picture_as_pdf_rounded),
             title: const Text("Esporta PDF"),
             onTap: () {
@@ -398,7 +442,7 @@ class _CsvPageState extends State<CsvViewPage> {
             title: const Text("Impostazioni file"),
             onTap: () async {
               Navigator.pop(context);
-              final newName = await Navigator.push<String>(
+              final result = await Navigator.push<dynamic>(
                 context,
                 MaterialPageRoute(
                   builder: (context) => FileSettingsPage(
@@ -408,10 +452,55 @@ class _CsvPageState extends State<CsvViewPage> {
                   ),
                 ),
               );
-              if (newName != null && mounted) {
-                setState(() => _currentFileName = newName);
-                _autoSave();
+
+              if (result != null && result is Map && mounted) {
+                final String? newName = result['newName'];
+                // Recuperiamo la lista di mappe passata dalla FileSettingsPage
+                final List<dynamic>? newDataRaw = result['data'];
+                final bool reloaded = result['reloaded'] ?? false;
+
+                if (newName != null) {
+                  setState(() {
+                    _currentFileName = newName;
+                  });
+                }
+
+                if (reloaded && newDataRaw != null) {
+                  // Convertiamo esplicitamente la lista in List<Map<String, dynamic>>
+                  final List<Map<String, dynamic>> updatedData =
+                  List<Map<String, dynamic>>.from(newDataRaw);
+
+                  setState(() {
+                    // 1. Aggiorniamo la sorgente dati principale
+                    widget.data.clear();
+                    widget.data.addAll(updatedData);
+
+                    // 2. Sincronizziamo la visualizzazione usata dalla ListView
+                    _currentData = List.from(widget.data);
+
+                    // 3. Ricalcoliamo le colonne disponibili
+                    if (widget.data.isNotEmpty) {
+                      _allColumns = widget.data.first.keys.toList();
+
+                      if (!_allColumns.contains(_searchColumn)) {
+                        _searchColumn = _allColumns.first;
+                      }
+                    } else {
+                      _allColumns = [];
+                    }
+
+                    // 4. Reset dei filtri di ricerca per mostrare tutti i nuovi dati
+                    _searchController.clear();
+
+                    // 5. Incrementiamo il contatore per forzare la ricostruzione dei widget riga
+                    _resetCounter++;
+                  });
+                } else if (newName != null) {
+                  // Se è cambiato solo il nome senza ricaricare i dati, salviamo i metadati
+                  _autoSave();
+                }
               }
+
             },
           ),
           const SizedBox(height: 8),
@@ -535,7 +624,7 @@ class _CsvPageState extends State<CsvViewPage> {
             return Expanded(
               child: Text(
                 cellValue,
-                style: theme.textTheme.bodyMedium?.copyWith(color: colorScheme.onSurface.withOpacity(0.8)),
+                style: theme.textTheme.bodyMedium?.copyWith(color: colorScheme.onSurface.withValues(alpha: 0.8)),
               ),
             );
           }).toList(),
@@ -711,5 +800,49 @@ class _CsvPageState extends State<CsvViewPage> {
         ],
       ),
     );
+  }
+
+  // In csv_view_page.dart -> Aggiorna solo questo metodo
+  void _openFileSettings() async {
+    // Rimuovi <String> e usa <dynamic> o nulla per accettare il booleano di ritorno
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => FileSettingsPage(
+          currentName: _currentFileName,
+          fileIndex: widget.fileIndex,
+          storageService: widget.storageService,
+        ),
+      ),
+    );
+
+    // Se result è true, significa che i delimitatori sono cambiati e i dati ricalcolati
+    if (result == true && mounted) {
+      final allFiles = await widget.storageService.getAllFiles();
+      final updatedFile = allFiles[widget.fileIndex];
+
+      setState(() {
+        _currentFileName = updatedFile['name'];
+        // Sostituiamo i dati esistenti con quelli nuovi ricalcolati
+        widget.data.clear();
+        widget.data.addAll(List<Map<String, dynamic>>.from(updatedFile['data']));
+        _currentData = List.from(widget.data);
+
+        // Aggiorniamo le colonne se la struttura è cambiata
+        if (widget.data.isNotEmpty) {
+          _allColumns = widget.data.first.keys.toList();
+          _visibleColumns = updatedFile['visibleColumns'] != null
+              ? Set.from(updatedFile['visibleColumns'])
+              : Set.from(_allColumns);
+        }
+      });
+    } else if (result is String && mounted) {
+      // Gestione vecchio caso se restituisci ancora solo il nome
+      setState(() => _currentFileName = result);
+    } else if (mounted) {
+      // Caso in cui è cambiato solo il nome senza re-parsing (result è null o diverso)
+      final allFiles = await widget.storageService.getAllFiles();
+      setState(() => _currentFileName = allFiles[widget.fileIndex]['name']);
+    }
   }
 }

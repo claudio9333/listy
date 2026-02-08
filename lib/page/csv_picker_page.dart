@@ -1,7 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:material_symbols_icons/symbols.dart';
-
 import '../service/csv_service.dart';
 import '../service/storega_service.dart';
 import 'csv_view_page.dart';
@@ -44,13 +43,19 @@ class _CsvPickerScreenState extends State<CsvPickerScreen> {
       setState(() => _isLoading = true);
 
       final name = result.files.single.name;
-      final path = result.files.single.path;
       final bytes = result.files.single.bytes!;
+      final rawContent = utf8.decode(bytes);
       final parsedData = _csvService.parseCsvFromBytes(bytes);
+      await _storageService.addFile(
+        name,
+        parsedData,
+        rawContent: rawContent,
+        fieldDelimiter: ',',
+        eol: '\n',
+      );
 
-      await _storageService.addFile(name, parsedData, path);
-      _refreshData();
       setState(() => _isLoading = false);
+      _refreshData();
     }
   }
 
@@ -59,8 +64,10 @@ class _CsvPickerScreenState extends State<CsvPickerScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text("Le mie liste")),
       floatingActionButton: FloatingActionButton(
-        onPressed: _pickFile,
-        child: const Icon(Icons.add),
+        onPressed: _isLoading ? null : _pickFile,
+        child: _isLoading
+            ? const CircularProgressIndicator(color: Colors.white)
+            : const Icon(Icons.add),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -70,53 +77,40 @@ class _CsvPickerScreenState extends State<CsvPickerScreen> {
         padding: const EdgeInsets.all(16),
         itemCount: _allFiles.length,
         itemBuilder: (context, index) {
-          final fileMap = _allFiles[index];
+          final file = _allFiles[index];
           return Card(
-            elevation: 1,
-            margin: const EdgeInsets.only(bottom: 12),
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: ListTile(
-              leading: Icon(Symbols.csv,
-                  color: Theme.of(context).colorScheme.primary,
-                  size: 40),
-              title: Text(fileMap['name'], style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                color: Theme.of(context).colorScheme.primary,
-                fontWeight: FontWeight.bold,
-              )),
-              subtitle: Text("${(fileMap['data'] as List).length} righe"),
+              title: Text(file['name'] ?? "Senza nome"),
+              subtitle: Text("${(file['data'] as List).length} righe"),
               trailing: IconButton(
-                icon: Icon(Icons.delete,
-                    color: Theme.of(context).colorScheme.secondary),
+                icon: const Icon(Icons.delete),
                 onPressed: () async {
                   await _storageService.deleteFile(index);
                   _refreshData();
                 },
               ),
               onTap: () async {
-                final List<Map<String, dynamic>> allFiles = await _storageService.getAllFiles();
-                final fileMap = allFiles[index];
                 await Navigator.push(
                   context,
                   MaterialPageRoute(
                     builder: (context) => CsvViewPage(
-                      fileName: fileMap['name'],
-                      path: fileMap['path'],
-                      data: List<Map<String, dynamic>>.from(fileMap['data']),
-                      initialEditableColumn: fileMap['editableColumn'],
-                      initialVisibleColumns: fileMap['visibleColumns'] != null
-                          ? List<String>.from(fileMap['visibleColumns'])
+                      fileName: file['name'],
+                      data: List<Map<String, dynamic>>.from(file['data']),
+                      initialEditableColumn: file['editableColumn'],
+                      initialVisibleColumns: file['visibleColumns'] != null
+                          ? List<String>.from(file['visibleColumns'])
                           : null,
-                      initialColumnTypes: fileMap['columnTypes'] != null
-                          ? Map<String, String>.from(fileMap['columnTypes'])
+                      initialColumnTypes: file['columnTypes'] != null
+                          ? Map<String, String>.from(file['columnTypes'])
                           : {},
                       storageService: _storageService,
                       fileIndex: index,
                     ),
                   ),
                 );
-
-                // 2. Quando l'utente torna indietro, aggiorna la lista dei file
                 _refreshData();
-                            },
+              },
             ),
           );
         },
