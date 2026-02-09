@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:developer' as developer;
 import 'dart:html' as html if (dart.library.io) 'dart:io';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -241,7 +240,9 @@ class _CsvPageState extends State<CsvViewPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final displayColumns = _allColumns;
+    final List<String> displayColumns = _allColumns
+        .where((col) => _visibleColumns.contains(col))
+        .toList();
 
     if (!_visibleColumns.contains(_searchColumn) && displayColumns.isNotEmpty) {
       _searchColumn = displayColumns.first;
@@ -651,12 +652,14 @@ class _CsvPageState extends State<CsvViewPage> {
     );
   }
 
-  void _showSettings() {
+    void _showSettings() {
     final theme = Theme.of(context);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
       builder: (context) => StatefulBuilder(
         builder: (context, setST) => DraggableScrollableSheet(
           initialChildSize: 0.7,
@@ -665,62 +668,87 @@ class _CsvPageState extends State<CsvViewPage> {
             controller: controller,
             padding: const EdgeInsets.all(24),
             children: [
-              Text("Configurazione colonne", style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+              Text(
+                "Configurazione colonne",
+                style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+              ),
               const SizedBox(height: 20),
               ..._allColumns.map((col) {
                 final isVisible = _visibleColumns.contains(col);
                 final isCurrentlyEditable = _editableColumn == col;
+
                 return Card(
                   elevation: 0,
                   color: theme.colorScheme.surfaceContainerLow,
                   margin: const EdgeInsets.only(bottom: 12),
                   child: !isVisible
                       ? ListTile(
-                    leading: Checkbox(
-                        value: false,
-                        onChanged: (v) {
-                          setState(() => _visibleColumns.add(col));
-                          setST(() {});
-                          _autoSave();
-                        }),
-                    title: Text(col, style: TextStyle(color: theme.disabledColor)),
-                  )
+                          leading: Checkbox(
+                            value: false,
+                            onChanged: (v) {
+                              setState(() => _visibleColumns.add(col));
+                              setST(() {});
+                              _autoSave();
+                            },
+                          ),
+                          title: Text(col, style: TextStyle(color: theme.disabledColor)),
+                        )
                       : ExpansionTile(
-                    key: Key(col + (isCurrentlyEditable ? '_open' : '_closed')),
-                    initiallyExpanded: isCurrentlyEditable,
-                    leading: Checkbox(
-                        value: true,
-                        onChanged: (v) {
-                          setState(() {
-                            _visibleColumns.remove(col);
-                            if (_editableColumn == col) {
-                              _editableColumn = null;
-                              _columnTypes[col] = 'off';
-                            }
-                          });
-                          setST(() {});
-                          _autoSave();
-                        }),
-                    title: Text(col),
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                        child: SegmentedButton<String>(
-                          segments: const [
-                            ButtonSegment(value: 'off', label: Text("Off"), icon: Icon(Icons.edit_off)),
-                            ButtonSegment(value: 'text', label: Text("Abc"), icon: Icon(Icons.abc)),
-                            ButtonSegment(value: 'int', label: Text("123"), icon: Icon(Icons.tag)),
-                            ButtonSegment(value: 'double', label: Text("1.1"), icon: Icon(Icons.pin_outlined)),
+                          key: Key(col + (isCurrentlyEditable ? '_open' : '_closed')),
+                          initiallyExpanded: isCurrentlyEditable,
+                          leading: Checkbox(
+                            value: true,
+                            onChanged: (v) {
+                              setState(() {
+                                _visibleColumns.remove(col);
+                                if (_editableColumn == col) {
+                                  _editableColumn = null;
+                                  _columnTypes[col] = 'off';
+                                }
+                              });
+                              setST(() {});
+                              _autoSave();
+                            },
+                          ),
+                          title: Text(col),
+                          trailing: isCurrentlyEditable
+                              ? Icon(Icons.edit_note, color: theme.colorScheme.primary)
+                              : const Icon(Icons.expand_more),
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                              child: Column(
+                                children: [
+                                  const Divider(),
+                                  const SizedBox(height: 8),
+                                  const Text(
+                                    "Tipo di input da tastiera",
+                                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  SegmentedButton<String>(
+                                    segments: const [
+                                      ButtonSegment(
+                                        value: 'off',
+                                        label: Text("Disabilitato"),
+                                        icon: Icon(Icons.edit_off_sharp),
+                                      ),
+                                      ButtonSegment(value: 'text', label: Text("Abc"), icon: Icon(Icons.abc)),
+                                      ButtonSegment(value: 'int', label: Text("123"), icon: Icon(Icons.tag)),
+                                      ButtonSegment(
+                                          value: 'double', label: Text("1.1"), icon: Icon(Icons.pin_outlined)),
+                                    ],
+                                    selected: {_columnTypes[col]!},
+                                    onSelectionChanged: (newVal) {
+                                      _updateEditableType(col, newVal.first);
+                                      setST(() {});
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
                           ],
-                          selected: {_columnTypes[col]!},
-                          onSelectionChanged: (newVal) {
-                            _updateEditableType(col, newVal.first);
-                            setST(() {});
-                          },
                         ),
-                      ),
-                    ],
-                  ),
                 );
               }).toList(),
             ],
